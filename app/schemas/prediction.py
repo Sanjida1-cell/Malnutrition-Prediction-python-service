@@ -1,12 +1,12 @@
-"""Prediction request and response schemas."""
+"""Prediction request and response schemas supporting Sets A, B, and C."""
 
 from enum import Enum
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field
 
 
 class ModelChoice(str, Enum):
-    """Available Set C machine learning models."""
+    """Available machine learning algorithm keys."""
     LOGISTIC_REGRESSION = "logistic_regression"
     RANDOM_FOREST = "random_forest"
     GRADIENT_BOOSTING = "gradient_boosting"
@@ -16,11 +16,25 @@ class ModelChoice(str, Enum):
     DECISION_TREE = "decision_tree"
 
 
+class FeatureSetChoice(str, Enum):
+    """Available predictor feature sets."""
+    SET_A = "a"
+    SET_B = "b"
+    SET_C = "c"
+
+
 class InputData(BaseModel):
     """
-    Child anthropometric and demographic input feature vector (Predictor Set C)
-    with model selector.
+    Child anthropometric, demographic and clinical input feature vector.
+    Features dynamically adapt based on the selected `feature_set`:
+      - Set A: month, sex_male, area_noakhali (3 features)
+      - Set B: month, sex_male, area_noakhali, weight, height (5 features)
+      - Set C: month, sex_male, area_noakhali, weight, height, waz, haz, whz (8 features)
     """
+    feature_set: Optional[str] = Field(
+        default="c",
+        description="Predictor set to use: 'a' (demographics), 'b' (demographics + body size), or 'c' (full clinical + WHO Z-scores). Defaults to 'c'."
+    )
     month: float = Field(
         ..., ge=0, le=120, description="Child age in months (cohort focused on 6-60 months)"
     )
@@ -30,25 +44,25 @@ class InputData(BaseModel):
     area_noakhali: int = Field(
         ..., ge=0, le=1, description="Study district: 1 if Noakhali, 0 if Lakshmipur"
     )
-    weight: float = Field(
-        ..., ge=0, le=50, description="Child weight in kilograms (kg)"
+    weight: Optional[float] = Field(
+        default=None, ge=0, le=50, description="Child weight in kilograms (kg) - required for Set B & Set C"
     )
-    height: float = Field(
-        ..., ge=0, le=150, description="Child height/length in centimeters (cm)"
+    height: Optional[float] = Field(
+        default=None, ge=0, le=150, description="Child height/length in centimeters (cm) - required for Set B & Set C"
     )
-    waz: float = Field(
-        ..., ge=-6.0, le=6.0, description="Weight-for-Age Z-score (-6.0 to +6.0)"
+    waz: Optional[float] = Field(
+        default=None, ge=-6.0, le=6.0, description="Weight-for-Age Z-score (-6.0 to +6.0) - required for Set C"
     )
-    haz: float = Field(
-        ..., ge=-6.0, le=6.0, description="Height-for-Age Z-score (-6.0 to +6.0)"
+    haz: Optional[float] = Field(
+        default=None, ge=-6.0, le=6.0, description="Height-for-Age Z-score (-6.0 to +6.0) - required for Set C"
     )
-    whz: float = Field(
-        ..., ge=-6.0, le=6.0, description="Weight-for-Height Z-score (-6.0 to +6.0)"
+    whz: Optional[float] = Field(
+        default=None, ge=-6.0, le=6.0, description="Weight-for-Height Z-score (-6.0 to +6.0) - required for Set C"
     )
-    model_name: Optional[ModelChoice] = Field(
-        default=ModelChoice.LOGISTIC_REGRESSION,
+    model_name: Optional[str] = Field(
+        default="logistic_regression",
         description=(
-            "Model algorithm to execute prediction on. Options: 'logistic_regression' (default, recommended), "
+            "Model algorithm to execute inference on. Options: 'logistic_regression' (default), "
             "'random_forest', 'gradient_boosting', 'stacking_ensemble', 'svm_rbf', 'mlp', 'decision_tree'."
         )
     )
@@ -56,6 +70,7 @@ class InputData(BaseModel):
     model_config = {
         "json_schema_extra": {
             "example": {
+                "feature_set": "c",
                 "month": 39.66,
                 "sex_male": 1,
                 "area_noakhali": 0,
@@ -72,7 +87,8 @@ class InputData(BaseModel):
 
 class PredictionResponse(BaseModel):
     """Clinical malnutrition prediction result and risk assessment."""
-    model_used: str = Field(..., description="Key of the model selected for inference")
+    feature_set: str = Field(..., description="Feature set used for prediction ('a', 'b', or 'c')")
+    model_used: str = Field(..., description="Key of the model algorithm selected")
     model_file: str = Field(..., description="File name of the model")
     model_type: str = Field(..., description="Underlying ML algorithm class name")
     prediction: int = Field(..., description="Binary classification (0 = Normal, 1 = Malnourished)")
@@ -82,3 +98,4 @@ class PredictionResponse(BaseModel):
     model_loaded: bool = Field(..., description="Whether the model was loaded successfully")
     features_used: List[float] = Field(..., description="Ordered feature values used for prediction")
     feature_dict: Dict[str, float] = Field(..., description="Named feature values dictionary")
+    latency_ms: Optional[int] = Field(None, description="Inference latency in milliseconds")
