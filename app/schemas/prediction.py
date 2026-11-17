@@ -33,10 +33,10 @@ class InputData(BaseModel):
     """
     feature_set: Optional[str] = Field(
         default="c",
-        description="Predictor set to use: 'a' (demographics), 'b' (demographics + body size), or 'c' (full clinical + WHO Z-scores). Defaults to 'c'."
+        description="Predictor set to use: 'a' (demographics), 'b' (demographics + body size), or 'c' (full predictors + WHO Z-scores). Defaults to 'c'."
     )
     month: float = Field(
-        ..., ge=0, le=120, description="Child age in months (cohort focused on 6-60 months)"
+        ..., ge=0, le=120, description="Child age in months (cohort focused on 6 to 60 months; predictions outside 6 to 60 months are extrapolations)"
     )
     sex_male: int = Field(
         ..., ge=0, le=1, description="Child sex: 1 if Male, 0 if Female"
@@ -86,16 +86,15 @@ class InputData(BaseModel):
 
 
 class PredictionResponse(BaseModel):
-    """Clinical malnutrition prediction result and risk assessment."""
+    """Research prototype prediction result."""
     feature_set: str = Field(..., description="Feature set used for prediction ('a', 'b', or 'c')")
     model_used: str = Field(..., description="Key of the model algorithm selected")
     model_file: str = Field(..., description="File name of the model")
     model_type: str = Field(..., description="Underlying ML algorithm class name")
-    prediction: int = Field(..., description="Binary classification (0 = Normal, 1 = Malnourished)")
-    status: str = Field(..., description="Clinical status interpretation ('Normal' or 'Malnourished')")
+    prediction: int = Field(..., description="Binary classification (0 = Normal/MUAC>=12.5cm, 1 = Predicted MUAC<12.5cm)")
+    status: str = Field(..., description="Status interpretation ('Predicted MUAC >= 12.5 cm' or 'Predicted MUAC < 12.5 cm')")
     risk_probability: float = Field(..., description="Predicted probability of acute malnutrition (0.0 to 1.0)")
-    risk_level: str = Field(..., description="Clinical risk tier: 'Low Risk', 'Moderate Risk', or 'High Risk'")
+    threshold: float = Field(..., description="Model classification decision threshold chosen by inner cross-validation")
     model_loaded: bool = Field(..., description="Whether the model was loaded successfully")
     features_used: List[float] = Field(..., description="Ordered feature values used for prediction")
     feature_dict: Dict[str, float] = Field(..., description="Named feature values dictionary")
-    latency_ms: Optional[int] = Field(None, description="Inference latency in milliseconds")

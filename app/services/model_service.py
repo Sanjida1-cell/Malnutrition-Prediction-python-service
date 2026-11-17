@@ -25,8 +25,7 @@ from app.config import (
     MODEL_CONFIGS,
     DEFAULT_SET,
     DEFAULT_MODEL,
-    RISK_THRESHOLD_MODERATE,
-    RISK_THRESHOLD_HIGH,
+    MODEL_THRESHOLDS,
 )
 from app.schemas.prediction import InputData, PredictionResponse, ModelChoice, FeatureSetChoice
 
@@ -228,25 +227,25 @@ class ModelService:
         features = np.array([feature_values], dtype=np.float64)
 
         try:
-            # Binary prediction: 0 = Normal, 1 = Malnourished
-            raw_prediction = int(active_model.predict(features)[0])
-
-            # Class 1 (Malnourished) probability
+            # Class 1 probability
             if hasattr(active_model, "predict_proba"):
                 probabilities = active_model.predict_proba(features)[0]
                 risk_probability = round(float(probabilities[1]), 4)
             else:
+                risk_probability = -1.0  # fallback: no proba available
+
+            # Classification via paper threshold (not 0.5)
+            decision_threshold = MODEL_THRESHOLDS.get(algo_key, 0.5)
+            if risk_probability >= 0:
+                raw_prediction = 1 if risk_probability >= decision_threshold else 0
+            else:
+                raw_prediction = int(active_model.predict(features)[0])
                 risk_probability = 1.0 if raw_prediction == 1 else 0.0
 
-            # Determine risk tier
-            if risk_probability >= RISK_THRESHOLD_HIGH:
-                risk_level = "High Risk"
-            elif risk_probability >= RISK_THRESHOLD_MODERATE:
-                risk_level = "Moderate Risk"
-            else:
-                risk_level = "Low Risk"
-
-            status = "Malnourished" if raw_prediction == 1 else "Normal"
+            status = (
+                "Predicted MUAC < 12.5 cm" if raw_prediction == 1
+                else "Predicted MUAC >= 12.5 cm"
+            )
             model_config = MODEL_CONFIGS[composite_key]
 
             return PredictionResponse(
@@ -257,7 +256,7 @@ class ModelService:
                 prediction=raw_prediction,
                 status=status,
                 risk_probability=risk_probability,
-                risk_level=risk_level,
+                threshold=decision_threshold,
                 model_loaded=True,
                 features_used=feature_values,
                 feature_dict=feature_dict,
