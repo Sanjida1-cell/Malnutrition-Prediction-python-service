@@ -1,7 +1,7 @@
-"""Export trained Set C models and decision thresholds for child malnutrition prediction.
+"""Export trained models and decision thresholds across Predictor Sets A, B, and C.
 
 Reproduces the exact training procedure and settings reported in Table S4 and Table S5
-of the manuscript, fitting 7 benchmarked machine learning models on Predictor Set C
+of the manuscript, fitting 7 benchmarked machine learning models across all three predictor sets
 using the 465-child cohort dataset (stratified 80/20 train/test split, random_state=42).
 
 Reference repository: https://github.com/imak2363/child-malnutrition
@@ -15,7 +15,6 @@ import warnings
 from pathlib import Path
 import numpy as np
 
-# Suppress sklearn deprecation/future warnings for clean output
 warnings.filterwarnings("ignore")
 
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_predict
@@ -36,33 +35,41 @@ MODELS_DIR = BASE_DIR / "models"
 
 
 def load_dataset():
-    """Load the 465-row dataset and extract Set C features and target."""
     if not DATA_PATH.exists():
         raise FileNotFoundError(f"Dataset not found at {DATA_PATH}")
 
     with open(DATA_PATH, "r", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
-    # Feature Set C: 8 parameters
-    # month, sex_male, area_noakhali, weight, height, waz, haz, whz
-    def extract_features(r):
+    def feat_a(r):
         return [
             float(r["MONTH"]),
             1.0 if r["SEX"].strip().lower() == "male" else 0.0,
             1.0 if r["Area"].strip().lower() == "noakhali" else 0.0,
+        ]
+
+    def feat_b(r):
+        return feat_a(r) + [
             float(r["WEIGHT"]),
             float(r["HEIGHT"]),
+        ]
+
+    def feat_c(r):
+        return feat_b(r) + [
             float(r["WAZ"]),
             float(r["HAZ"]),
             float(r["WHZ"]),
         ]
 
-    X = np.array([extract_features(r) for r in rows], dtype=np.float64)
     y = np.array([int(r["muac_malnourished"]) for r in rows], dtype=int)
-    return X, y, rows
+    sets = {
+        "a": np.array([feat_a(r) for r in rows], dtype=np.float64),
+        "b": np.array([feat_b(r) for r in rows], dtype=np.float64),
+        "c": np.array([feat_c(r) for r in rows], dtype=np.float64),
+    }
+    return sets, y
 
 
-# Model constructor functions adhering to Table S4 specifications
 def make_lr():
     return Pipeline([
         ("s", StandardScaler()),
@@ -121,13 +128,11 @@ MODEL_PROTOS = {
 
 
 def youden_threshold(y_true, proba):
-    """Compute Youden-optimal threshold maximizing (sensitivity + specificity - 1)."""
     fpr, tpr, thr = roc_curve(y_true, proba)
     return float(thr[np.argmax(tpr - fpr)])
 
 
 def inner_threshold(model_proto, X_train, y_train):
-    """Compute Youden-optimal threshold from 5-fold inner cross-validation out-of-fold probabilities."""
     p_inner = cross_val_predict(
         clone(model_proto()),
         X_train,
@@ -140,57 +145,53 @@ def inner_threshold(model_proto, X_train, y_train):
 
 def export_all():
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    X, y, _ = load_dataset()
+    sets, y = load_dataset()
     print(f"Loaded cohort: {len(y)} children ({int(y.sum())} malnourished, {len(y) - int(y.sum())} normal)")
 
     idx = np.arange(len(y))
     tr_idx, te_idx = train_test_split(idx, test_size=0.2, stratify=y, random_state=RANDOM_STATE)
-    Xtr, Xte = X[tr_idx], X[te_idx]
     ytr, yte = y[tr_idx], y[te_idx]
-
-    print(f"Training split: n={len(ytr)} (malnourished {int(ytr.sum())})")
-    print(f"Held-out test split: n={len(yte)} (malnourished {int(yte.sum())})")
-    print("-" * 75)
 
     thresholds_dict = {}
 
-    for name, proto in MODEL_PROTOS.items():
-        print(f"Training and evaluating: {name}...")
-        model = proto().fit(Xtr, ytr)
-        thr = inner_threshold(proto, Xtr, ytr)
+    for set_key in ["a", "b", "c"]:
+        X = sets[set_key]
+        Xtr, Xte = X[tr_idx], X[te_idx]
+        print(f"\n=== Training Predictor Set {set_key.upper()} ({X.shape[1]} features) ===")
 
-        # Save model pickle
-        out_file = MODELS_DIR / f"model_set_c_{name}.pkl"
-        with open(out_file, "wb") as f:
-            pickle.dump(model, f)
+        for name, proto in MODEL_PROTOS.items():
+            model = proto().fit(Xtr, ytr)
+            thr = inner_threshold(proto, Xtr, ytr)
 
-        # Evaluate on held-out test set
-        pr_te = model.predict_proba(Xte)[:, 1]
-        pred = (pr_te >= thr).astype(int)
-        acc = accuracy_score(yte, pred)
-        bacc = balanced_accuracy_score(yte, pred)
-        auc = roc_auc_score(yte, pr_te)
-        tp = int(((pred == 1) & (yte == 1)).sum())
+            out_file = MODELS_DIR / f"model_set_{set_key}_{name}.pkl"
+            with open(out_file, "wb") as f:
+                pickle.dump(model, f)
 
-        thresholds_dict[name] = {
-            "threshold": round(thr, 4),
-            "held_out_accuracy": round(float(acc), 4),
-            "held_out_bacc": round(float(bacc), 4),
-            "held_out_auc": round(float(auc), 4),
-            "tp_identified": tp,
-            "total_positives": int(yte.sum()),
-        }
+            pr_te = model.predict_proba(Xte)[:, 1]
+            pred = (pr_te >= thr).astype(int)
+            acc = accuracy_score(yte, pred)
+            bacc = balanced_accuracy_score(yte, pred)
+            auc = roc_auc_score(yte, pr_te)
+            tp = int(((pred == 1) & (yte == 1)).sum())
 
-        print(f"  -> Saved {out_file.name}")
-        print(f"     Threshold: {thr:.4f} | Held-out Acc: {acc*100:.1f}% | AUC: {auc:.3f} | TP: {tp}/{int(yte.sum())}")
+            key_name = name if set_key == "c" else f"set_{set_key}_{name}"
+            thresholds_dict[key_name] = {
+                "set": set_key.upper(),
+                "threshold": round(thr, 4),
+                "held_out_accuracy": round(float(acc), 4),
+                "held_out_bacc": round(float(bacc), 4),
+                "held_out_auc": round(float(auc), 4),
+                "tp_identified": tp,
+                "total_positives": int(yte.sum()),
+            }
 
-    # Save thresholds.json
+            print(f"  [{set_key.upper()}] {name:<20} | Thr: {thr:.4f} | Acc: {acc*100:.1f}% | AUC: {auc:.3f} | TP: {tp}/{int(yte.sum())}")
+
     thresholds_file = MODELS_DIR / "thresholds.json"
     with open(thresholds_file, "w", encoding="utf-8") as f:
         json.dump(thresholds_dict, f, indent=2)
-    print("-" * 75)
-    print(f"Successfully saved thresholds to {thresholds_file.name}")
-    print("Export complete.")
+    print("\n" + "=" * 75)
+    print(f"Successfully trained and saved all 21 models + thresholds.json!")
 
 
 if __name__ == "__main__":
